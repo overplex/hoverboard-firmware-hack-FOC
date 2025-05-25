@@ -113,29 +113,33 @@ int16_t dc_curr;                 // global variable for Total DC Link current
 int16_t cmdL;                    // global variable for Left Command 
 int16_t cmdR;                    // global variable for Right Command 
 
+extern uint16_t wheel_left_ticks;
+extern uint16_t wheel_right_ticks;
+
 //------------------------------------------------------------------------
 // Local variables
 //------------------------------------------------------------------------
 #if defined(FEEDBACK_SERIAL_USART2) || defined(FEEDBACK_SERIAL_USART3)
 typedef struct{
   uint16_t  start;
-  int16_t   cmd1;
-  int16_t   cmd2;
-  int16_t   speedR_meas;
-  int16_t   speedL_meas;
+  //int16_t   cmd1;
+  //int16_t   cmd2;
+  int16_t   leftSpeed;
+  int16_t   rightSpeed;
+  uint16_t  leftTicks;
+  uint16_t  rightTicks;
   int16_t   batVoltage;
   int16_t   boardTemp;
-  uint16_t  cmdLed;
   uint16_t  checksum;
 } SerialFeedback;
 static SerialFeedback Feedback;
 #endif
-#if defined(FEEDBACK_SERIAL_USART2)
+/*#if defined(FEEDBACK_SERIAL_USART2)
 static uint8_t sideboard_leds_L;
 #endif
 #if defined(FEEDBACK_SERIAL_USART3)
 static uint8_t sideboard_leds_R;
-#endif
+#endif*/
 
 #ifdef VARIANT_TRANSPOTTER
   uint8_t  nunchuk_connected;
@@ -343,8 +347,8 @@ int main(void) {
 
       #if defined(TANK_STEERING) && !defined(VARIANT_HOVERCAR) && !defined(VARIANT_SKATEBOARD) 
         // Tank steering (no mixing)
-        cmdL = steer; 
-        cmdR = speed;
+        cmdL = steer; // ADC1
+        cmdR = speed; // ADC2
       #else 
         // ####### MIXER #######
         mixerFcn(speed << 4, steer << 4, &cmdR, &cmdL);   // This function implements the equations above
@@ -463,15 +467,15 @@ int main(void) {
     #if defined(SIDEBOARD_SERIAL_USART2)
       sideboardSensors((uint8_t)Sideboard_L.sensors);
     #endif
-    #if defined(FEEDBACK_SERIAL_USART2)
+    /*#if defined(FEEDBACK_SERIAL_USART2)
       sideboardLeds(&sideboard_leds_L);
-    #endif
+    #endif*/
     #if defined(SIDEBOARD_SERIAL_USART3)
       sideboardSensors((uint8_t)Sideboard_R.sensors);
     #endif
-    #if defined(FEEDBACK_SERIAL_USART3)
+    /*#if defined(FEEDBACK_SERIAL_USART3)
       sideboardLeds(&sideboard_leds_R);
-    #endif
+    #endif*/
     
 
     // ####### CALC BOARD TEMPERATURE #######
@@ -508,29 +512,35 @@ int main(void) {
 
     // ####### FEEDBACK SERIAL OUT #######
     #if defined(FEEDBACK_SERIAL_USART2) || defined(FEEDBACK_SERIAL_USART3)
-      if (main_loop_counter % 2 == 0) {    // Send data periodically every 10 ms
+      // (main_loop_counter % N == 0) interval = N * 5 ms; N = interval / 5;
+      if (main_loop_counter % 4 == 0) { // 1000 / 20 = 50 times per second
         Feedback.start	        = (uint16_t)SERIAL_START_FRAME;
-        Feedback.cmd1           = (int16_t)input1[inIdx].cmd;
-        Feedback.cmd2           = (int16_t)input2[inIdx].cmd;
-        Feedback.speedR_meas	  = (int16_t)rtY_Right.n_mot;
-        Feedback.speedL_meas	  = (int16_t)rtY_Left.n_mot;
+        //Feedback.cmd1           = (int16_t)input1[inIdx].cmd;
+        //Feedback.cmd2           = (int16_t)input2[inIdx].cmd;
+        Feedback.leftSpeed	    = (int16_t)rtY_Left.n_mot;
+        Feedback.rightSpeed	    = (int16_t)rtY_Right.n_mot;
+        Feedback.leftTicks	    = (uint16_t)wheel_left_ticks;
+        Feedback.rightTicks	    = (uint16_t)wheel_right_ticks;
         Feedback.batVoltage	    = (int16_t)batVoltageCalib;
         Feedback.boardTemp	    = (int16_t)board_temp_deg_c;
 
         #if defined(FEEDBACK_SERIAL_USART2)
           if(__HAL_DMA_GET_COUNTER(huart2.hdmatx) == 0) {
-            Feedback.cmdLed     = (uint16_t)sideboard_leds_L;
-            Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas 
-                                           ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed);
+            Feedback.checksum   = (uint16_t)(Feedback.start 
+                                          //^ Feedback.cmd1 ^ Feedback.cmd2 
+                                          ^ Feedback.leftSpeed ^ Feedback.rightSpeed 
+                                          ^ Feedback.leftTicks ^ Feedback.rightTicks 
+                                          ^ Feedback.batVoltage ^ Feedback.boardTemp);
 
             HAL_UART_Transmit_DMA(&huart2, (uint8_t *)&Feedback, sizeof(Feedback));
           }
         #endif
         #if defined(FEEDBACK_SERIAL_USART3)
           if(__HAL_DMA_GET_COUNTER(huart3.hdmatx) == 0) {
-            Feedback.cmdLed     = (uint16_t)sideboard_leds_R;
-            Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas 
-                                           ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed);
+            Feedback.checksum   = (uint16_t)(Feedback.start 
+                                          ^ Feedback.leftSpeed ^ Feedback.rightSpeed 
+                                          ^ Feedback.leftTicks ^ Feedback.rightTicks 
+                                          ^ Feedback.batVoltage ^ Feedback.boardTemp);
 
             HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&Feedback, sizeof(Feedback));
           }
@@ -558,7 +568,7 @@ int main(void) {
     } else if (timeoutFlgADC) {                                                                       // 2 beeps (low pitch): ADC timeout
       beepCount(2, 24, 1);
     } else if (timeoutFlgSerial) {                                                                    // 3 beeps (low pitch): Serial timeout
-      beepCount(3, 24, 1);
+      //beepCount(3, 24, 1);
     } else if (timeoutFlgGen) {                                                                       // 4 beeps (low pitch): General timeout (PPM, PWM, Nunchuk)
       beepCount(4, 24, 1);
     } else if (TEMP_WARNING_ENABLE && board_temp_deg_c >= TEMP_WARNING) {                             // 5 beeps (low pitch): Mainboard temperature warning

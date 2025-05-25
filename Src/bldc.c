@@ -81,6 +81,22 @@ static int16_t offsetdcr    = 2000;
 int16_t        batVoltage       = (400 * BAT_CELLS * BAT_CALIB_ADC) / BAT_CALIB_REAL_VOLTAGE;
 static int32_t batVoltageFixdt  = (400 * BAT_CELLS * BAT_CALIB_ADC) / BAT_CALIB_REAL_VOLTAGE << 16;  // Fixed-point filter output initialized at 400 V*100/cell = 4 V/cell converted to fixed-point
 
+uint16_t wheel_left_ticks = 0;
+uint16_t wheel_right_ticks = 0;
+
+static uint8_t enc_val_previous_left = 0;
+static uint8_t enc_val_previous_right = 0;
+
+int8_t enc_vals_table[6] = { 0, -1, -2, 0, 2, 1 };
+
+uint16_t clamp_module_max(int16_t value, uint16_t max) {
+  return ((value % max) + max) % max;
+}
+
+int8_t calc_encoder_ticks(uint8_t enc_val_previous, uint8_t enc_val_current) {
+  return enc_vals_table[clamp_module_max(enc_val_previous - enc_val_current, 6)];
+}
+
 // =================================
 // DMA interrupt frequency =~ 16 kHz
 // =================================
@@ -200,6 +216,15 @@ void DMA1_Channel1_IRQHandler(void) {
   // motSpeedLeft = rtY_Left.n_mot;
   // motAngleLeft = rtY_Left.a_elecAngle;
 
+    // Calc encoder value and find code for hall sensor in table
+    uint8_t encoder_left = (uint8_t)((hall_ul << 2) + (hall_vl << 1) + hall_wl); // 0 - 7
+    encoder_left = rtConstP.vec_hallToPos_Value[encoder_left]; // 0, 2, 0, 1, 4, 3, 5, 0
+    wheel_left_ticks = clamp_module_max(
+      wheel_left_ticks + calc_encoder_ticks(enc_val_previous_left, encoder_left), 
+      9000 // 100 wheel revolutions
+    );
+    enc_val_previous_left = encoder_left;
+
     /* Apply commands */
     LEFT_TIM->LEFT_TIM_U    = (uint16_t)CLAMP(ul + pwm_res / 2, pwm_margin, pwm_res-pwm_margin);
     LEFT_TIM->LEFT_TIM_V    = (uint16_t)CLAMP(vl + pwm_res / 2, pwm_margin, pwm_res-pwm_margin);
@@ -237,6 +262,14 @@ void DMA1_Channel1_IRQHandler(void) {
  // errCodeRight  = rtY_Right.z_errCode;
  // motSpeedRight = rtY_Right.n_mot;
  // motAngleRight = rtY_Right.a_elecAngle;
+
+    uint8_t encoder_right = (uint8_t)((hall_ur << 2) + (hall_vr << 1) + hall_wr);
+    encoder_right = rtConstP.vec_hallToPos_Value[encoder_right];
+    wheel_right_ticks = clamp_module_max(
+      wheel_right_ticks - calc_encoder_ticks(enc_val_previous_right, encoder_right), 
+      9000 // 100 wheel revolutions
+    );
+    enc_val_previous_right = encoder_right;
 
     /* Apply commands */
     RIGHT_TIM->RIGHT_TIM_U  = (uint16_t)CLAMP(ur + pwm_res / 2, pwm_margin, pwm_res-pwm_margin);
